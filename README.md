@@ -1,7 +1,7 @@
 # SDC25
 SDC 2024-2025 CRANSEDS Repo
 
-### Scripts folder contains starting ideas for the problems we are going to face such as:
+### [Scripts](/scripts) folder contains starting ideas for the problems we are going to face such as:
 ##### Detect a qr code: get its inclination, distance etc
 ##### XXX
 ##### XXX
