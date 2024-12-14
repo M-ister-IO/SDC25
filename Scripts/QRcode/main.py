@@ -1,6 +1,39 @@
 import cv2
 from pyzbar.pyzbar import decode
 import numpy as np
+import yaml
+import logging
+import os
+import math
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+# Function to load YAML config
+def load_config(config_path="config.yaml"):
+    # Get the directory of the current script
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(script_dir, config_path)
+    try:
+        with open(config_path, "r") as file:
+            return yaml.safe_load(file)
+    except FileNotFoundError:
+        logging.error(f"Configuration file {config_path} not found.")
+        raise
+    except yaml.YAMLError as e:
+        logging.error(f"Error parsing YAML file: {e}")
+        raise
+
+# Load config
+config = load_config()
+
+# Extract config
+try:
+    focal_length = config['focal_length']
+    qr_code_side_length = config['qr_code_side_length']
+except KeyError as e:
+    logging.error(f"Missing configuration key: {e}")
+    raise
 
 def sort_corners(points):
     """
@@ -11,46 +44,69 @@ def sort_corners(points):
     bottom_two = sorted(points[2:], key=lambda p: p[0])  # Bottom-left and bottom-right
     return [top_two[0], top_two[1], bottom_two[1], bottom_two[0]]
 
-def calculate_z_orientation(points):
+
+def calculate_yaw(corners, qr_code_side_length=0.07, distance=0.3):
     """
-    Estimate the z-orientation (tilt) of the QR code based on side heights.
+    Calculate the yaw (rotation around the z-axis).
+    Args:
+        corners: List of four points [(x1, y1), (x2, y2), (x3, y3), (x4, y4)] sorted as top-left, top-right, bottom-right, bottom-left.
+        qr_code_side_length: Actual side length of the QR code in meters.
+        distance: Distance from the camera to the QR code in meters.
+    Returns:
+        yaw_angle: Yaw angle in degrees.
     """
-    # Ensure points are sorted in the correct order
-    sorted_points = sort_corners(points)
-    top_left, top_right, bottom_right, bottom_left = sorted_points
+    # Extract heights of the top and bottom sides
+    top_left, top_right, bottom_right, bottom_left = corners
 
-    # Calculate side heights
-    height_left = np.linalg.norm(np.array(bottom_left) - np.array(top_left))
-    height_right = np.linalg.norm(np.array(bottom_right) - np.array(top_right))
+    left_height = np.linalg.norm(np.array(top_left) - np.array(bottom_left))
+    right_height = np.linalg.norm(np.array(bottom_right) - np.array(top_right))
 
-    # Calculate height difference and average height
-    height_diff = abs(height_left - height_right)
-    avg_height = (height_left + height_right) / 2
+    tan_theta = (left_height - right_height) / (4*math.sqrt(left_height**2 + right_height**2 - (left_height - right_height)**2))
+    
+    # Calculate the yaw angle in radians
+    theta_radians = math.atan(tan_theta)
+    
+    # Convert the yaw angle to degrees
+    theta_degrees = math.degrees(theta_radians)
 
-    # Calculate tilt angle in degrees
-    tilt_angle = np.arctan2(height_diff, avg_height) * 180 / np.pi
-    return tilt_angle, height_left, height_right
+    return np.degrees(theta_degrees)
 
 def calculate_center(points):
     """
     Calculate the center of the QR code based on its bounding box points.
     """
-    x_coords = [point[0] for point in points]
-    y_coords = [point[1] for point in points]
-    center_x = sum(x_coords) // len(x_coords)
-    center_y = sum(y_coords) // len(y_coords)
-    return center_x, center_y
+    center = np.mean(points, axis=0).astype(int)
+    return tuple(center)
+
+def draw_annotations(frame, center, tilt, points):
+    """
+    Draw bounding box, center, and annotations on the frame.
+    """
+    # Draw bounding box
+    points_np = np.array(points, dtype=int)
+    cv2.polylines(frame, [points_np], isClosed=True, color=(255, 0, 0), thickness=2)
+
+    # Draw center point
+    cv2.circle(frame, center, radius=5, color=(0, 0, 255), thickness=-1)
+
+    # Add annotations
+    cv2.putText(frame, f"Center: {(str(center[0]),str(center[1]))}", (10, 60),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+    cv2.putText(frame, f"Yaw angle: {tilt:.0f}", (10, 90),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
 
 def process_video(source=0):
     cap = cv2.VideoCapture(source)
 
     if not cap.isOpened():
-        print("Error: Could not open video source.")
+        logging.error("Error: Could not open video source.")
         return
 
+    logging.info("Starting video capture...")
     while True:
         ret, frame = cap.read()
         if not ret:
+            logging.warning("No frame captured. Exiting...")
             break
 
         qr_codes = decode(frame)
@@ -58,45 +114,23 @@ def process_video(source=0):
             points = qr_code.polygon
 
             if len(points) == 4:  # Ensure a valid bounding box
-                # Convert points to a usable format
                 points_array = [(point.x, point.y) for point in points]
                 sorted_points = sort_corners(points_array)
 
-                # Calculate center
-                center_x, center_y = calculate_center(sorted_points)
+                center = calculate_center(sorted_points)
+                z_rotation = calculate_yaw(sorted_points)
 
-                # Calculate z-orientation
-                z_orientation, height_left, height_right = calculate_z_orientation(sorted_points)
-
-                # Display z-orientation and height info
-                cv2.putText(frame, f"Z-Tilt: {z_orientation:.2f}°", (10, 90),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-                cv2.putText(frame, f"H-L: {height_left:.1f}, H-R: {height_right:.1f}", (10, 120),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-
-                # Draw the bounding box and display information
-                points_np = np.array(sorted_points, dtype=int)
-                cv2.polylines(frame, [points_np], isClosed=True, color=(255, 0, 0), thickness=2)
-
-
-                cv2.putText(frame, f"Center: ({center_x}, {center_y})", (10, 60),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-
-                # Draw the center point
-                cv2.circle(frame, (center_x, center_y), radius=5, color=(0, 0, 255), thickness=-1)
+                draw_annotations(frame, center, z_rotation, sorted_points)
 
         # Show the frame
-        cv2.imshow('QR Code Orientation and Center', frame)
+        cv2.imshow('QR Code rotation and Center', frame)
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
+            logging.info("Quitting video stream...")
             break
 
     cap.release()
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    source = "camera"
-    if source.lower() == "camera":
-        process_video(0)
-    else:
-        process_video(source)
+    process_video(0)
