@@ -83,8 +83,12 @@ def draw_annotations(frame, center, tilt, points):
     Draw bounding box, center, and annotations on the frame.
     """
     # Draw bounding box
-    points_np = np.array(points, dtype=int)
-    cv2.polylines(frame, [points_np], isClosed=True, color=(255, 0, 0), thickness=2)
+    if abs(tilt)<=10:
+        points_np = np.array(points, dtype=int)
+        cv2.polylines(frame, [points_np], isClosed=True, color=(0, 255, 0), thickness=2)
+    else:
+        points_np = np.array(points, dtype=int)
+        cv2.polylines(frame, [points_np], isClosed=True, color=(0, 0, 255), thickness=2)
 
     # Draw center point
     cv2.circle(frame, center, radius=5, color=(0, 0, 255), thickness=-1)
